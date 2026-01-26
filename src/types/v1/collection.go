@@ -2,7 +2,7 @@ package types
 
 import "github.com/shopspring/decimal"
 
-type CollectionFilterparams struct {
+type CollectionItemFilterParams struct {
 	Sort        int    `json:"sort"`
 	Status      []int  `json:"status"`
 	Markets     []int  `json:"markets"`
@@ -61,7 +61,7 @@ type NFTListingInfo struct {
 	ListTime       int64           `json:"list_time"`
 	ListPrice      decimal.Decimal `json:"list_price"`
 	ListExpireTime int64           `json:"list_expire_time"`
-	ListSalt       string          `json:"list_salt"`
+	ListSalt       int64           `json:"list_salt"`
 	ListMaker      string          `json:"list_maker"`
 
 	BidOrderID    string          `json:"bid_order_id"`
@@ -90,13 +90,13 @@ type CollectionRankingInfo struct {
 	Name        string          `json:"name"`
 	Address     string          `json:"address"`
 	FloorPrice  string          `json:"floor_price"`
-	FloorChange string          `json:"floor_change"`
+	FloorChange string          `json:"floor_price_change"`
 	SellPrice   string          `json:"sell_price"`
 	Volume      decimal.Decimal `json:"volume"`
 	ItemNum     int64           `json:"item_num"`
-	ItemOwner   string          `json:"item_owner"`
+	ItemOwner   int64           `json:"item_owner"`
 	ItemSold    int64           `json:"item_sold"`
-	ListAmount  int64           `json:"list_amount"`
+	ListAmount  int             `json:"list_amount"`
 	ChainID     int             `json:"chain_id"`
 }
 

@@ -2,12 +2,12 @@ package types
 
 import "github.com/SimonHofman/EasySwapBase/stores/gdb/orderbookmodel/multi"
 
-type Trait struct {
+type TraitCount struct {
 	multi.ItemTrait
 	Count int64 `json:"count"`
 }
 
-type ItemTraitResp struct {
+type ItemTraitsResp struct {
 	Result interface{} `json:"result"`
 }
 

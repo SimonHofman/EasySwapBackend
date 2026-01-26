@@ -2,17 +2,17 @@ package types
 
 import "github.com/shopspring/decimal"
 
-type UserCollectionParams struct {
+type UserCollectionsParams struct {
 	UserAddresses []string `json:"user_addresses"`
 }
 
-type UserCollection struct {
+type UserCollections struct {
 	ChainID    int             `json:"chain_id"`
 	Address    string          `json:"address"`
 	Name       string          `json:"name"`
 	Symbol     string          `json:"symbol"`
 	ImageURI   string          `json:"image_uri"`
-	ItemCount  int             `json:"item_count"`
+	ItemCount  int64           `json:"item_count"`
 	FloorPrice decimal.Decimal `json:"floor_price"`
 	ItemAmount int64           `json:"item_amount"`
 }
@@ -23,7 +23,7 @@ type CollectionInfo struct {
 	Address    string          `json:"address"`
 	Symbol     string          `json:"symbol"`
 	ImageURI   string          `json:"image_uri"`
-	ListAmount int64           `json:"list_amount"`
+	ListAmount int             `json:"list_amount"`
 	ItemAmount int64           `json:"item_amount"`
 	FloorPrice decimal.Decimal `json:"floor_price"`
 }
@@ -35,8 +35,8 @@ type ChainInfo struct {
 }
 
 type UserCollectionsData struct {
-	CollectionInfos []CollectionInfo `json:"collection_infos"`
-	ChainInfos      []ChainInfo      `json:"chain_infos"`
+	CollectionInfos []CollectionInfo `json:"collection_info"`
+	ChainInfos      []ChainInfo      `json:"chain_info"`
 }
 
 type UserCollectionsResp struct {
@@ -106,7 +106,7 @@ type PortfolioItemInfo struct {
 
 type UserItemsResp struct {
 	Result interface{} `json:"result"`
-	Count  int         `json:"count"`
+	Count  int64       `json:"count"`
 }
 
 type UserListingsResp struct {
@@ -174,5 +174,5 @@ type UserBid struct {
 
 type MultichainCollection struct {
 	CollectionAddress string `json:"collection_address"`
-	Chain             int    `json:"chain"`
+	Chain             string `json:"chain"`
 }

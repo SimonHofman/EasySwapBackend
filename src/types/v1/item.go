@@ -26,7 +26,7 @@ type ItemOwner struct {
 type ItemImage struct {
 	CollectionAddress string `json:"collection_address"`
 	TokenID           string `json:"token_id"`
-	ImageURI          string `json:"image_uri"`
+	ImageUri          string `json:"image_uri"`
 }
 
 type ItemDetailInfo struct {
@@ -67,7 +67,7 @@ type ItemDetailInfoResp struct {
 }
 
 type ListingInfo struct {
-	MarketplaceID int32           `json:"marketplace_id"`
+	MarketplaceId int32           `json:"marketplace_id"`
 	Price         decimal.Decimal `json:"price"`
 }
 
