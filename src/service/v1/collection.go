@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/SimonHofman/EasySwapBackend/src/dao"
+	"github.com/SimonHofman/EasySwapBackend/src/service/mq"
 	"github.com/SimonHofman/EasySwapBackend/src/service/svc"
 	"github.com/SimonHofman/EasySwapBackend/src/types/v1"
 	"github.com/SimonHofman/EasySwapBase/errcode"
