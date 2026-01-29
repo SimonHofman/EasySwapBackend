@@ -4,7 +4,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/pkg/errors"
 
-	"github.com/SimonHofman/EasySwapBackend/src/config/utils"
+	"github.com/SimonHofman/EasySwapBackend/src/common/utils"
 	"github.com/SimonHofman/EasySwapBase/evm/eip"
 )
 

@@ -1,0 +1,695 @@
+package service
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"sync"
+
+	"github.com/SimonHofman/EasySwapBackend/src/dao"
+	"github.com/SimonHofman/EasySwapBackend/src/service/svc"
+	"github.com/SimonHofman/EasySwapBackend/src/types/v1"
+	"github.com/SimonHofman/EasySwapBase/errcode"
+	"github.com/SimonHofman/EasySwapBase/evm/eip"
+	"github.com/SimonHofman/EasySwapBase/logger/xzap"
+	"github.com/SimonHofman/EasySwapBase/ordermanager"
+	"github.com/SimonHofman/EasySwapBase/stores/gdb/orderbookmodel/multi"
+	"github.com/pkg/errors"
+	"github.com/shopspring/decimal"
+	"go.uber.org/zap"
+)
+
+func GetBids(ctx context.Context, svcCtx *svc.ServerCtx, chain string, collectionAddr string, page, pageSize int) (*types.CollectionBidsResp, error) {
+	bids, count, err := svcCtx.Dao.QueryCollectionBids(ctx, chain, collectionAddr, page, pageSize)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed on get item info")
+	}
+
+	return &types.CollectionBidsResp{
+		Result: bids,
+		Count:  count,
+	}, nil
+}
+
+func GetItems(ctx context.Context, svcCtx *svc.ServerCtx, chain string, filter types.CollectionItemFilterParams, collectionAddr string) (*types.NFTListingInfoResp, error) {
+	items, count, err := svcCtx.Dao.QueryCollectionItemOrder(ctx, chain, filter, collectionAddr)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed on get item info")
+	}
+
+	var ItemIds []string
+	var ItemOwners []string
+	var itemPrice []types.ItemPriceInfo
+	for _, item := range items {
+		if item.TokenId != "" {
+			ItemIds = append(ItemIds, item.TokenId)
+		}
+		if item.Owner != "" {
+			ItemOwners = append(ItemOwners, item.Owner)
+		}
+
+		if item.Listing {
+			itemPrice = append(itemPrice, types.ItemPriceInfo{
+				CollectionAddress: item.CollectionAddress,
+				TokenID:           item.TokenId,
+				Maker:             item.Owner,
+				Price:             item.ListPrice,
+				OrderStatus:       multi.OrderStatusActive,
+			})
+		}
+	}
+
+	var queryErr error
+	var wg sync.WaitGroup
+
+	ordersInfo := make(map[string]multi.Order)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if len(itemPrice > 0) {
+			orders, err := svcCtx.Dao.QueryListingInfo(ctx, chain, itemPrice)
+			if err != nil {
+				queryErr = errors.Wrap(err, "failed on get orders time info")
+				return
+			}
+
+			for _, order := range orders {
+				ordersInfo[strings.ToLower(order.CollectionAddress+order.TokenId)] = order
+			}
+		}
+	}()
+
+	ItemsExternal := make(map[string]multi.ItemExternal)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if len(ItemIds) != 0 {
+			items, err := svcCtx.Dao.QueryCollectionItemsImage(ctx, chain, collectionAddr, ItemIds)
+			if err != nil {
+				queryErr = errors.Wrap(err, "failed on get items image info")
+			}
+			for _, item := range items {
+				ItemsExternal[strings.ToLower(item.TokenId)] = item
+			}
+		}
+	}()
+
+	userItemCount := make(map[string]int64)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if len(ItemIds) != 0 {
+			itemCount, err := svcCtx.Dao.QueryUsersItemCount(ctx, chain, collectionAddr, ItemOwners)
+			if err != nil {
+				queryErr = errors.Wrap(err, "failed on get items image info")
+				return
+			}
+			for _, v := range itemCount {
+				userItemCount[strings.ToLower(v.Owner)] = v.Counts
+			}
+		}
+	}()
+
+	lastSales := make(map[string]decimal.Decimal)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if len(ItemIds) != 0 {
+			lastSale, err := svcCtx.Dao.QueryLastSalePrice(ctx, chain, collectionAddr, ItemIds)
+			if err != nil {
+				queryErr = errors.Wrap(err, "failed on get  items last sale info")
+			}
+			for _, v := range lastSale {
+				lastSales[strings.ToLower(v.TokenId)] = v.Price
+			}
+		}
+	}()
+
+	bestBids := make(map[string]multi.Order)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if len(ItemIds) != 0 {
+			bids, err := svcCtx.Dao.QueryBestBids(ctx, chain, filter.UserAddress, collectionAddr, ItemIds)
+			if err != nil {
+				queryErr = errors.Wrap(err, "failed on get items last sale info")
+				return
+			}
+			for _, bid := range bids {
+				order, ok := bestBids[strings.ToLower(bid.TokenId)]
+				if !ok {
+					bestBids[strings.ToLower(bid.TokenId)] = bid
+					continue
+				}
+
+				if bid.Price.GreaterThan(order.Price) {
+					bestBids[strings.ToLower(bid.TokenId)] = bid
+				}
+			}
+		}
+	}()
+
+	var collectionBestBid multi.Order
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		collectionBestBid, err = svcCtx.Dao.QueryCollectionBestBid(ctx, chain, filter.UserAddress, collectionAddr)
+		if err != nil {
+			queryErr = errors.Wrap(err, "failed on get items last sale info")
+			return
+		}
+	}()
+
+	wg.Wait()
+	if queryErr != nil {
+		return nil, errors.Wrap(queryErr, "failed on get items info")
+	}
+
+	var respItems []*types.NFTListingInfo
+	for _, item := range items {
+		nameStr := item.Name
+		if nameStr == "" {
+			nameStr = fmt.Sprintf("#%s", item.TokenId)
+		}
+
+		respItem := &types.NFTListingInfo{
+			Name:              nameStr,
+			CollectionAddress: item.CollectionAddress,
+			TokenID:           item.TokenId,
+			OwnerAddress:      item.Owner,
+			ListPrice:         item.ListPrice,
+			MarketID:          item.MarketID,
+			BidOrderID:        collectionBestBid.OrderID,
+			BidExpireTime:     collectionBestBid.ExpireTime,
+			BidPrice:          collectionBestBid.Price,
+			BidTime:           collectionBestBid.EventTime,
+			BidSalt:           collectionBestBid.Salt,
+			BidMaker:          collectionBestBid.Maker,
+			BidType:           getBidType(collectionBestBid.OrderType),
+			BidSize:           collectionBestBid.Size,
+			BidUnfilled:       collectionBestBid.QuantityRemaining,
+		}
+
+		listOrder, ok := ordersInfo[strings.ToLower(item.CollectionAddress+item.TokenId)]
+		if ok {
+			respItem.ListTime = listOrder.EventTime
+			respItem.ListOrderID = listOrder.OrderID
+			respItem.ListExpireTime = listOrder.ExpireTime
+			respItem.ListSalt = listOrder.Salt
+		}
+
+		bidOrder, ok := bestBids[strings.ToLower(item.TokenId)]
+		if ok {
+			if bidOrder.Price.GreaterThan(collectionBestBid.Price) {
+				respItem.BidOrderID = bidOrder.OrderID
+				respItem.BidExpireTime = bidOrder.ExpireTime
+				respItem.BidPrice = bidOrder.Price
+				respItem.BidTime = bidOrder.EventTime
+				respItem.BidSalt = bidOrder.Salt
+				respItem.BidMaker = bidOrder.Maker
+				respItem.BidType = getBidType(bidOrder.OrderType)
+				respItem.BidSize = bidOrder.Size
+				respItem.BidUnfilled = bidOrder.QuantityRemaining
+			}
+		}
+
+		itemExternal, ok := ItemsExternal[strings.ToLower(item.TokenId)]
+		if ok {
+			if itemExternal.IsUploadedOss {
+				respItem.ImageURI = itemExternal.OssUri
+			} else {
+				respItem.ImageURI = itemExternal.ImageUri
+			}
+			if len(itemExternal.VideoUri) > 0 {
+				respItem.VideoType = itemExternal.VideoType
+				if itemExternal.IsVideoUploaded {
+					respItem.VideoURI = itemExternal.VideoOssUri
+				} else {
+					respItem.VideoURI = itemExternal.VideoUri
+				}
+			}
+		}
+
+		count, ok := userItemCount[strings.ToLower(item.Owner)]
+		if ok {
+			respItem.OwnerOwnedAmount = count
+		}
+
+		price, ok := lastSales[strings.ToLower(item.TokenId)]
+		if ok {
+			respItem.LastSellPrice = price
+		}
+
+		respItems = append(respItems, respItem)
+	}
+
+	return &types.NFTListingInfoResp{
+		Result: respItems,
+		Count:  count,
+	}, nil
+}
+
+func GetItem(ctx context.Context, svcCtx *svc.ServerCtx, chain string, chainID int, collectionAddr, tokenID string) (*types.ItemDetailInfoResp, error) {
+	var queryErr error
+	var wg sync.WaitGroup
+
+	var collection *multi.Collection
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		collection, queryErr = svcCtx.Dao.QueryCollectionInfo(ctx, chain, collectionAddr)
+		if queryErr != nil {
+			return
+		}
+	}()
+
+	var item *multi.Item
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		item, queryErr = svcCtx.Dao.QueryItemInfo(ctx, chain, collectionAddr, tokenID)
+		if queryErr != nil {
+			return
+		}
+	}()
+
+	var itemListInfo *dao.CollectionItem
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		itemListInfo, queryErr = svcCtx.Dao.QueryItemListInfo(ctx, chain, collectionAddr, tokenID)
+		if queryErr != nil {
+			return
+		}
+	}()
+
+	ItemExternals := make(map[string]multi.ItemExternal)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		items, err := svcCtx.Dao.QueryCollectionItemsImage(ctx, chain, collectionAddr, []string{tokenID})
+		if err != nil {
+			queryErr = errors.Wrap(err, "failed on get items image info")
+			return
+		}
+
+		for _, item := range items {
+			ItemExternals[strings.ToLower(item.TokenId)] = item
+		}
+	}()
+
+	lastSales := make(map[string]decimal.Decimal)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		lastSale, err := svcCtx.Dao.QueryLastSalePrice(ctx, chain, collectionAddr, []string{tokenID})
+		if err != nil {
+			queryErr = errors.Wrap(err, "failed on get items last sale info")
+			return
+		}
+
+		for _, v := range lastSale {
+			lastSales[strings.ToLower(v.TokenId)] = v.Price
+		}
+	}()
+
+	bestBids := make(map[string]multi.Order)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		bids, err := svcCtx.Dao.QueryBestBids(ctx, chain, "", collectionAddr, []string{tokenID})
+		if err != nil {
+			queryErr = errors.Wrap(err, "failed on get items last sale info")
+			return
+		}
+
+		for _, bid := range bids {
+			order, ok := bestBids[strings.ToLower(bid.TokenId)]
+			if !ok {
+				bestBids[strings.ToLower(bid.TokenId)] = bid
+				continue
+			}
+			if bid.Price.GreaterThan(order.Price) {
+				bestBids[strings.ToLower(bid.TokenId)] = bid
+			}
+		}
+	}()
+
+	var collectionBestBid multi.Order
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		bid, err := svcCtx.Dao.QueryCollectionBestBid(ctx, chain, "", collectionAddr)
+		if err != nil {
+			queryErr = errors.Wrap(err, "failed on get items last sale info")
+			return
+		}
+		collectionBestBid = bid
+	}
+
+	wg.Wait()
+	if queryErr != nil {
+		return nil, errors.Wrap(queryErr, "failed on get item info")
+	}
+
+	var itemDetail types.ItemDetailInfo
+	itemDetail.ChainID = chainID
+
+	if item != nil {
+		itemDetail.Name = item.Name
+		itemDetail.CollectionAddress = item.CollectionAddress
+		itemDetail.TokenID = item.TokenId
+		itemDetail.OwnerAddress = item.Owner
+		itemDetail.BidOrderID = collectionBestBid.OrderID
+		itemDetail.BidExpireTime = collectionBestBid.ExpireTime
+		itemDetail.BidPrice = collectionBestBid.Price
+		itemDetail.BidTime = collectionBestBid.EventTime
+		itemDetail.BidSalt = collectionBestBid.Salt
+		itemDetail.BidMaker = collectionBestBid.Maker
+		itemDetail.BidType = getBidType(collectionBestBid.OrderType)
+		itemDetail.BidSize = collectionBestBid.Size
+		itemDetail.BidUnfilled = collectionBestBid.QuantityRemaining
+	}
+
+	bidOrder, ok := bestBids[strings.ToLower(item.TokenId)]
+	if ok {
+		if bidOrder.Price.GreaterThan(collectionBestBid.Price) {
+			itemDetail.BidOrderID = bidOrder.OrderID
+			itemDetail.BidExpireTime = bidOrder.ExpireTime
+			itemDetail.BidPrice = bidOrder.Price
+			itemDetail.BidTime = bidOrder.EventTime
+			itemDetail.BidSalt = bidOrder.Salt
+			itemDetail.BidMaker = bidOrder.Maker
+			itemDetail.BidType = getBidType(bidOrder.OrderType)
+			itemDetail.BidSize = bidOrder.Size
+			itemDetail.BidUnfilled = bidOrder.QuantityRemaining
+		}
+	}
+
+	if itemListInfo != nil {
+		itemDetail.ListPrice = itemListInfo.ListPrice
+		itemDetail.MarketplaceID = itemListInfo.MarketID
+		itemDetail.ListOrderID = itemListInfo.OrderID
+		itemDetail.ListTime = itemListInfo.ListTime
+		itemDetail.ListExpireTime = itemListInfo.ListExpireTime
+		itemDetail.ListSalt = itemListInfo.ListSalt
+		itemDetail.ListMaker = itemListInfo.ListMaker
+	}
+
+	if collection != nil {
+		itemDetail.CollectionName = collection.Name
+		itemDetail.FloorPrice = collection.FloorPrice
+		itemDetail.CollectionImageURI = collection.ImageUri
+		if itemDetail.Name == "" {
+			itemDetail.Name = fmt.Sprintf("%s #%s", collection.Name, tokenID)
+		}
+	}
+
+	price, ok := lastSales[strings.ToLower(tokenID)]
+	if ok {
+		itemDetail.LastSellPrice = price
+	}
+
+	itemExternal, ok := ItemExternals[strings.ToLower(tokenID)]
+	if ok {
+		itemDetail.ImageURI = itemExternal.ImageUri
+		if itemExternal.IsUploadedOss {
+			itemDetail.ImageURI = itemExternal.OssUri
+		}
+		if len(itemExternal.VideoUri) > 0 {
+			itemDetail.VideoType = itemExternal.VideoType
+			if itemExternal.IsVideoUploaded {
+				itemDetail.VideoURI = itemExternal.VideoOssUri
+			} else {
+				itemDetail.VideoURI = itemExternal.VideoUri
+			}
+		}
+	}
+
+	return &types.ItemDetailInfoResp{
+		Result: itemDetail,
+	}, nil
+}
+
+func GetItemTopTraitPrice(ctx context.Context, svcCtx *svc.ServerCtx, chain, collectionAddr string, tokenIDs []string) (*types.ItemTopTraitResp, error) {
+	traitsPrice, err := svcCtx.Dao.QueryTraitsPrice(ctx, chain, collectionAddr, tokenIDs)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed on calc top trait")
+	}
+
+	if len(traitsPrice) == 0 {
+		return &types.ItemTopTraitResp{
+			Result: []types.TraitPrice{},
+		}, nil
+	}
+
+	traitsPrices := make(map[string]decimal.Decimal)
+	for _, traitPrice := range traitsPrice {
+		traitsPrices[strings.ToLower(fmt.Sprintf("%s:%s", traitPrice.Trait, traitPrice.TraitValue))] = traitPrice.Price
+	}
+
+	traits, err := svcCtx.Dao.QueryItemsTraits(ctx, chain, collectionAddr, tokenIDs)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed on query items trait")
+	}
+
+	topTraits := make(map[string]types.TraitPrice)
+	for _, trait := range traits {
+		key := strings.ToLower(fmt.Sprintf("%s:%s", trait.Trait, trait.TraitValue))
+		price, ok := traitsPrices[key]
+		if ok {
+			topPrice, ok := topTraits[trait.TokenId]
+			if ok {
+				if price.LessThanOrEqual(topPrice.Price) {
+					continue
+				}
+			}
+
+			topTraits[trait.TokenId] = types.TraitPrice{
+				CollectionAddress: collectionAddr,
+				TokenID:           trait.TokenId,
+				Trait:             trait.Trait,
+				TraitValue:        trait.TraitValue,
+				Price:             price,
+			}
+		}
+	}
+
+	var results []types.TraitPrice
+	for _, topTrait := range topTraits {
+		results = append(results, topTrait)
+	}
+
+	return &types.ItemTopTraitResp{
+		Result: results,
+	}, nil
+}
+
+func GetHistorySalesPrice(ctx context.Context, svcCtx *svc.ServerCtx, chain, collectionAddr, duration string) ([]types.HistorySalesPriceInfo, error) {
+	var durationTimeStamp int64
+	if duration == "24h" {
+		durationTimeStamp = 24 * 60 * 60
+	} else if duration == "7d" {
+		durationTimeStamp = 7 * 24 * 60 * 60
+	} else if duration == "30d" {
+		durationTimeStamp = 30 * 24 * 60 * 60
+	} else {
+		return nil, errors.New("only support 24h/7d/30d")
+	}
+
+	historySalesPriceInfo, err := svcCtx.Dao.QueryHistorySalesPriceInfo(ctx, chain, collectionAddr, durationTimeStamp)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed on get history sales price info")
+	}
+
+	res := make([]types.HistorySalesPriceInfo, len(historySalesPriceInfo))
+	for i, ele := range historySalesPriceInfo {
+		res[i] = types.HistorySalesPriceInfo{
+			Price:     ele.Price,
+			TokenID:   ele.TokenId,
+			TimeStamp: ele.EventTime,
+		}
+	}
+
+	return res, nil
+}
+
+func GetItemOwner(ctx context.Context, svcCtx *svc.ServerCtx, chainID int64, chain, collectionAddr, tokenID string) (*types.ItemOwner, error) {
+	address, err := svcCtx.NodeSrvs[chainID].FetchNftOwner(collectionAddr, tokenID)
+	if err != nil {
+		xzap.WithContext(ctx).Error("failed on fetch nft owner onchain", zap.Error(err))
+		return nil, errcode.ErrUnexpected
+	}
+
+	owner, err := eip.ToCheckSumAddress(address.String())
+	if err != nil {
+		xzap.WithContext(ctx).Error("invalid address", zap.Error(err), zap.String("address", address.String()))
+		return nil, errcode.ErrUnexpected
+	}
+
+	if err := svcCtx.Dao.UpdateItemOwner(ctx, chain, collectionAddr, tokenID, owner); err != nil {
+		xzap.WithContext(ctx).Error("failed on update item owner", zap.Error(err), zap.String("address", address.String()))
+	}
+
+	return &types.ItemOwner{
+		CollectionAddress: collectionAddr,
+		TokenID:           tokenID,
+		Owner:             owner,
+	}, nil
+}
+
+func GetItemTraits(ctx context.Context, svcCtx *svc.ServerCtx, chain, collectionAddr, tokenID string) ([]types.TraitInfo, error) {
+	var traitInfos []types.TraitInfo
+	var itemTraits []multi.ItemTrait
+	var collection *multi.Collection
+	var traitCounts []types.TraitCount
+	var queryErr error
+	var wg sync.WaitGroup
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		itemTraits, queryErr = svcCtx.Dao.QueryItemTraits(
+			ctx,
+			chain,
+			collectionAddr,
+			tokenID,
+		)
+		if queryErr != nil {
+			return
+		}
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		traitCounts, queryErr = svcCtx.Dao.QueryCollectionTraits(
+			ctx,
+			chain,
+			collectionAddr,
+		)
+		if queryErr != nil {
+			return
+		}
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		collection, queryErr = svcCtx.Dao.QueryCollectionInfo(
+			ctx,
+			chain,
+			collectionAddr,
+		)
+		if queryErr != nil {
+			return
+		}
+	}()
+
+	wg.Wait()
+	if queryErr != nil {
+		return nil, queryErr
+	}
+
+	if len(itemTraits) == 0 {
+		return traitInfos, nil
+	}
+
+	traitCountMap := make(map[string]int64)
+	for _, trait := range traitCounts {
+		traitCountMap[fmt.Sprintf("%s-%s", trait.Trait, trait.TraitValue)] = trait.Count
+	}
+
+	for _, trait := range itemTraits {
+		key := fmt.Sprintf("%s-%s", trait.Trait, trait.TraitValue)
+		if count, ok := traitCountMap[key]; ok {
+			traitPercent := 0.0
+			if collection.ItemAmount != 0 {
+				traitPercent = decimal.NewFromInt(count).
+					DivRound(decimal.NewFromInt(collection.ItemAmount), 4).
+					Mul(decimal.NewFromInt(100)).
+					InexactFloat64()
+			}
+
+			traitInfos = append(traitInfos, types.TraitInfo{
+				Trait:        trait.Trait,
+				TraitValue:   trait.TraitValue,
+				TraitAmount:  count,
+				TraitPercent: traitPercent,
+			})
+		}
+	}
+
+	return traitInfos, nil
+}
+
+func GetCollectionDetail(ctx context.Context, svcCtx *svc.ServerCtx, chain string, collectionAddr string) (*types.CollectionDetailResp, error) {
+	collection, err := svcCtx.Dao.QueryCollectionInfo(ctx, chain, collectionAddr)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed on get collection info")
+	}
+
+	tradeInfos, err := svcCtx.Dao.GetTradeInfoByCollection(chain, collectionAddr, "1d")
+	if err != nil {
+		xzap.WithContext(ctx).Error("failed on get collection trade info", zap.Error(err))
+	}
+
+	listed, err := svcCtx.Dao.QueryListedAmount(ctx, chain, collectionAddr)
+	if err != nil {
+		xzap.WithContext(ctx).Error("failed on get listed count", zap.Error(err))
+	} else {
+		if err := svcCtx.Dao.CacheCollectionsListed(ctx, chain, collectionAddr, int(listed)); err != nil {
+			xzap.WithContext(ctx).Error("failed on cache colllection listed", zap.Error(err))
+		}
+	}
+
+	floorPrice, err := svcCtx.Dao.QueryFloorPrice(ctx, chain, collectionAddr)
+	if err != nil {
+		xzap.WithContext(ctx).Error("failed on get floor price", zap.Error(err))
+	}
+
+	collectionSell, err := svcCtx.Dao.QueryCollectionSellPrice(ctx, chain, collectionAddr)
+	if err != nil {
+		xzap.WithContext(ctx).Error("failed on get floor price", zap.Error(err))
+	}
+
+	if !floorPrice.Equal(collection.FloorPrice) {
+		if err := ordermanager.AddUpdatePriceEvent(svcCtx.KvStore, &ordermanager.TradeEvent{
+			EventType:      ordermanager.UpdateCollection,
+			CollectionAddr: collectionAddr,,
+			Price: floorPrice,
+		}, chain); err != nil {
+			xzap.WithContext(ctx).Error("failed on update floor price", zap.Error(err))
+		}
+	}
+
+	var volume24h decimal.Decimal
+	var sold int64
+	if tradeInfos != nil {
+		volume24h = tradeInfos.Volume
+		sold = tradeInfos.ItemCount
+	}
+
+	var allVol decimal.Decimal
+	collectionVol, err := svcCtx.Dao.GetCollectionVolume(chain, collectionAddr)
+	if err != nil {
+		xzap.WithContext(ctx).Error("failed on query collection all volume", zap.Error(err))
+	} else {
+		allVol = collectionVol
+	}
+
+	detail := types.CollectionDetail{
+		ImageUri: collection.ImageUri,
+		Name:     collection.Name,
+		Address:  collection.Address,
+		ChainId : collection.ChainId,
+		FloorPrice : floorPrice,
+		SellPrice: collectionSell.SalePrice.String(),
+		VolumeTotal: allVol,
+		Volume24h: volume24h,
+		Sold24h: sold,
+		ListAmount : listed,
+		TotalSupply: collection.ItemAmount,
+		OwnerAmount: collection.OwnerAmount,
+	}
+}
