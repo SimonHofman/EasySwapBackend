@@ -10,6 +10,8 @@ github.com/Shopify/sarama v1.19.0/go.mod h1:FVkBWblsNy7DGZRfXLU0O9RCGt5g3g3yEuWX
 github.com/Shopify/toxiproxy v2.1.4+incompatible/go.mod h1:OXgGpZ6Cli1/URJOF1DMxUHB2q5Ap20/P/eIdh4G0pI=
 github.com/SimonHofman/EasySwapBase v0.0.0-20260122081513-61bd2d326797 h1:V6CQxh1p75bMSdCTIoRNrLAWnvrMBa2OYvNuZpuF6us=
 github.com/SimonHofman/EasySwapBase v0.0.0-20260122081513-61bd2d326797/go.mod h1:hBuUgqBLd4u9vbCEAy1Jxx/HI4ZyGGMCwNfgzwzO6iY=
+github.com/SimonHofman/EasySwapBase v0.0.0-20260129092630-df4c3486b5d8 h1:eF4ntwhCws3N224e7h6BUuUpbAQdyiALvuP7V8YbrYk=
+github.com/SimonHofman/EasySwapBase v0.0.0-20260129092630-df4c3486b5d8/go.mod h1:hBuUgqBLd4u9vbCEAy1Jxx/HI4ZyGGMCwNfgzwzO6iY=
 github.com/VividCortex/gohistogram v1.0.0/go.mod h1:Pf5mBqqDxYaXu3hDrrU+w6nw50o/4+TcAqDqk/vUH7g=
 github.com/aead/siphash v1.0.1/go.mod h1:Nywa3cDsYNNK3gaciGTWPwHt0wlpNV15vwmswBAUSII=
 github.com/afex/hystrix-go v0.0.0-20180502004556-fa1af6a1f4f5/go.mod h1:SkGFH1ia65gfNATL8TAiHDNxPzPdmEL5uirI2Uyuz6c=

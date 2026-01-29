@@ -66,7 +66,7 @@ func GetItems(ctx context.Context, svcCtx *svc.ServerCtx, chain string, filter t
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		if len(itemPrice > 0) {
+		if len(itemPrice) > 0 {
 			orders, err := svcCtx.Dao.QueryListingInfo(ctx, chain, itemPrice)
 			if err != nil {
 				queryErr = errors.Wrap(err, "failed on get orders time info")
@@ -87,6 +87,7 @@ func GetItems(ctx context.Context, svcCtx *svc.ServerCtx, chain string, filter t
 			items, err := svcCtx.Dao.QueryCollectionItemsImage(ctx, chain, collectionAddr, ItemIds)
 			if err != nil {
 				queryErr = errors.Wrap(err, "failed on get items image info")
+				return
 			}
 			for _, item := range items {
 				ItemsExternal[strings.ToLower(item.TokenId)] = item
@@ -118,6 +119,7 @@ func GetItems(ctx context.Context, svcCtx *svc.ServerCtx, chain string, filter t
 			lastSale, err := svcCtx.Dao.QueryLastSalePrice(ctx, chain, collectionAddr, ItemIds)
 			if err != nil {
 				queryErr = errors.Wrap(err, "failed on get  items last sale info")
+				return
 			}
 			for _, v := range lastSale {
 				lastSales[strings.ToLower(v.TokenId)] = v.Price
@@ -345,11 +347,11 @@ func GetItem(ctx context.Context, svcCtx *svc.ServerCtx, chain string, chainID i
 			return
 		}
 		collectionBestBid = bid
-	}
+	}()
 
 	wg.Wait()
 	if queryErr != nil {
-		return nil, errors.Wrap(queryErr, "failed on get item info")
+		return nil, errors.Wrap(queryErr, "failed on get items info")
 	}
 
 	var itemDetail types.ItemDetailInfo
@@ -639,7 +641,7 @@ func GetCollectionDetail(ctx context.Context, svcCtx *svc.ServerCtx, chain strin
 		xzap.WithContext(ctx).Error("failed on get listed count", zap.Error(err))
 	} else {
 		if err := svcCtx.Dao.CacheCollectionsListed(ctx, chain, collectionAddr, int(listed)); err != nil {
-			xzap.WithContext(ctx).Error("failed on cache colllection listed", zap.Error(err))
+			xzap.WithContext(ctx).Error("failed on cache collection listed", zap.Error(err))
 		}
 	}
 
@@ -656,8 +658,8 @@ func GetCollectionDetail(ctx context.Context, svcCtx *svc.ServerCtx, chain strin
 	if !floorPrice.Equal(collection.FloorPrice) {
 		if err := ordermanager.AddUpdatePriceEvent(svcCtx.KvStore, &ordermanager.TradeEvent{
 			EventType:      ordermanager.UpdateCollection,
-			CollectionAddr: collectionAddr,,
-			Price: floorPrice,
+			CollectionAddr: collectionAddr,
+			Price:          floorPrice,
 		}, chain); err != nil {
 			xzap.WithContext(ctx).Error("failed on update floor price", zap.Error(err))
 		}
@@ -679,17 +681,50 @@ func GetCollectionDetail(ctx context.Context, svcCtx *svc.ServerCtx, chain strin
 	}
 
 	detail := types.CollectionDetail{
-		ImageUri: collection.ImageUri,
-		Name:     collection.Name,
-		Address:  collection.Address,
-		ChainId : collection.ChainId,
-		FloorPrice : floorPrice,
-		SellPrice: collectionSell.SalePrice.String(),
+		ImageUri:    collection.ImageUri,
+		Name:        collection.Name,
+		Address:     collection.Address,
+		ChainId:     collection.ChainId,
+		FloorPrice:  floorPrice,
+		SellPrice:   collectionSell.SalePrice.String(),
 		VolumeTotal: allVol,
-		Volume24h: volume24h,
-		Sold24h: sold,
-		ListAmount : listed,
+		Volume24h:   volume24h,
+		Sold24h:     sold,
+		ListAmount:  listed,
 		TotalSupply: collection.ItemAmount,
 		OwnerAmount: collection.OwnerAmount,
 	}
+
+	return &types.CollectionDetailResp{
+		Result: detail,
+	}, nil
+}
+
+func RefreshItemMetadata(ctx context.Context, svcCtx *svc.ServerCtx, chainName string, chainId int64, collectionAddress, tokenId string) error {
+	if err := mq.AddSingleItemToRefreshMetadataQueue(svcCtx.KvStore, svcCtx.C.ProjectCfg.Name, chainName, chainId, collectionAddress, tokenId); err != nil {
+		xzap.WithContext(ctx).Error("failed on add item to refresh queue", zap.Error(err), zap.String("collection address: ", collectionAddress), zap.String("item_id", tokenId))
+		return errcode.ErrUnexpected
+	}
+
+	return nil
+}
+
+func GetItemImage(ctx context.Context, svcCtx *svc.ServerCtx, chain string, collectionAddress, tokenId string) (*types.ItemImage, error) {
+	items, err := svcCtx.Dao.QueryCollectionItemsImage(ctx, chain, collectionAddress, []string{tokenId})
+
+	if err != nil || len(items) == 0 {
+		return nil, errors.Wrap(err, "failed on get item image")
+	}
+	var imageUri string
+	if items[0].IsUploadedOss {
+		imageUri = items[0].OssUri
+	} else {
+		imageUri = items[0].ImageUri
+	}
+
+	return &types.ItemImage{
+		CollectionAddress: collectionAddress,
+		TokenID:           tokenId,
+		ImageUri:          imageUri,
+	}, nil
 }

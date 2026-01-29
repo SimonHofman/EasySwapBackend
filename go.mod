@@ -3,7 +3,7 @@ module github.com/SimonHofman/EasySwapBackend
 go 1.25.1
 
 require (
-	github.com/SimonHofman/EasySwapBase v0.0.0-20260122081513-61bd2d326797 // indirect
+	github.com/SimonHofman/EasySwapBase v0.0.0-20260129092630-df4c3486b5d8 // indirect
 	github.com/anyswap/CrossChain-Bridge v0.3.9 // indirect
 	github.com/bytedance/sonic v1.14.0 // indirect
 	github.com/bytedance/sonic/loader v0.3.0 // indirect
