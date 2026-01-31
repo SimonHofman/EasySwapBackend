@@ -27,7 +27,7 @@ func (d *Dao) QueryCollectionItemsImage(ctx context.Context, chain string,
 	return itemsExternal, nil
 }
 
-func (d *Dao) QueryMultiChainCollectionItemsImage(ctx context.Context, itemInfos []MultiChainItemInfo) ([]multi.ItemExternal, error) {
+func (d *Dao) QueryMultiChainCollectionsItemsImage(ctx context.Context, itemInfos []MultiChainItemInfo) ([]multi.ItemExternal, error) {
 	var itemsExternal []multi.ItemExternal
 
 	sqlHead := "SELECT * FROM ("
